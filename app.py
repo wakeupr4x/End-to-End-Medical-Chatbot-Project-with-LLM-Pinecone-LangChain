@@ -6,6 +6,7 @@ import urllib.request
 import urllib.error
 
 from flask import Flask, jsonify, render_template, request, session
+from flask_cors import CORS
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
@@ -19,6 +20,7 @@ from prompt import system_prompt
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "medibot-dev-secret")
+CORS(app, supports_credentials=True, origins=["*"])
 
 load_dotenv()
 

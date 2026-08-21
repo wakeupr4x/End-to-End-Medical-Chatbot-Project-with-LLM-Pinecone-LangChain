@@ -6,6 +6,7 @@ langchain-groq
 langchain-pinecone
 google-genai
 flask
+flask-cors
 gunicorn
 pypdf
 python-dotenv
