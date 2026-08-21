@@ -1,5 +1,3 @@
-HI this is a minor proj
-
 # End-to-end-Medical-Chatbot-Generative-AI
 
 
