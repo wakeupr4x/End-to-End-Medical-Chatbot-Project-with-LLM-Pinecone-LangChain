@@ -30,8 +30,9 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 XAI_API_KEY = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
 XAI_MODEL = os.environ.get("XAI_MODEL", "grok-2-latest")
 XAI_VISION_MODEL = os.environ.get("XAI_VISION_MODEL", XAI_MODEL)
-GEMINI_TEXT_MODEL = os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.0-flash")
+GEMINI_TEXT_MODEL = os.environ.get("GEMINI_TEXT_MODEL", "gemini-3.6-flash")
 GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", GEMINI_TEXT_MODEL)
+GEMINI_CANDIDATES = [GEMINI_TEXT_MODEL, "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
 XAI_TEXT_CANDIDATES = [XAI_MODEL, "grok-2-latest", "grok-2-1212", "grok-1.5-latest"]
 XAI_VISION_CANDIDATES = [XAI_VISION_MODEL, "grok-2-vision-latest", "grok-2-vision-1212", "grok-2-latest"]
 
@@ -170,9 +171,22 @@ def xai_chat_completion(messages, model_candidates=None, temperature=0.2):
     raise RuntimeError(f"xAI request failed: {last_error}")
 
 
-def gemini_generate(parts, model):
-    response = ai_client.models.generate_content(model=model, contents=parts)
-    return (response.text or "").strip()
+def gemini_generate(parts, model=None):
+    candidates = [model] if model else []
+    candidates += GEMINI_CANDIDATES
+    seen = set()
+    ordered = [c for c in candidates if c and not (c in seen or seen.add(c))]
+
+    last_error = None
+    for cand in ordered:
+        try:
+            response = ai_client.models.generate_content(model=cand, contents=parts)
+            return (response.text or "").strip()
+        except Exception as exc:
+            last_error = exc
+            print(f"Gemini model {cand} failed: {exc}")
+
+    raise RuntimeError(f"All Gemini candidates failed: {last_error}")
 
 
 def compose_retrieval_prompt(context, lang, has_image=False, has_pdf=False, report_text=""):
@@ -283,14 +297,10 @@ def generate_response_with_provider(msg, lang, history, attachment, attachment_n
             mime_type=audio_file.content_type or "audio/wav",
         )
         try:
-            transcription_response = ai_client.models.generate_content(
-                model=GEMINI_TEXT_MODEL,
-                contents=[
-                    audio_part,
-                    "Provide a clean text transcription of this spoken health query. Skip intro or metadata lines.",
-                ],
-            )
-            transcription = (transcription_response.text or "").strip()
+            transcription = gemini_generate([
+                audio_part,
+                "Provide a clean text transcription of this spoken health query. Skip intro or metadata lines.",
+            ])
             msg = transcription
         except Exception as e:
             print(f"Audio transcription failed: {e}")
@@ -312,30 +322,24 @@ def generate_response_with_provider(msg, lang, history, attachment, attachment_n
     except Exception as exc:
         print(f"Gemini fallback failed: {exc}")
         if GROQ_API_KEY:
-            try:
-                print("Attempting Groq fallback (70b)...")
-                llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2, api_key=GROQ_API_KEY)
-                groq_messages = [
-                    SystemMessage(content=prompt_text),
-                    HumanMessage(content=f"Patient Query: {msg if msg else 'Analyze the attached medical imagery data.'}")
-                ]
-                response = llm.invoke(groq_messages)
-                return response.content
-            except Exception as groq_exc_70b:
-                print(f"Groq 70b fallback failed: {groq_exc_70b}")
+            groq_candidates = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"]
+            groq_messages = [
+                SystemMessage(content=prompt_text),
+                HumanMessage(content=f"Patient Query: {msg if msg else 'Analyze the attached medical imagery data.'}")
+            ]
+            groq_errors = []
+            for g_model in groq_candidates:
                 try:
-                    print("Attempting Groq fallback (8b)...")
-                    llm_8b = ChatGroq(model_name="llama3-8b-8192", temperature=0.2, api_key=GROQ_API_KEY)
-                    response_8b = llm_8b.invoke(groq_messages)
-                    return response_8b.content
-                except Exception as groq_exc_8b:
-                    print(f"Groq 8b fallback failed: {groq_exc_8b}")
-                    return (
-                        f"I can’t reach the AI provider right now.\n"
-                        f"Gemini error: {exc}\n"
-                        f"Groq (70b) error: {groq_exc_70b}\n"
-                        f"Groq (8b) error: {groq_exc_8b}"
-                    )
+                    llm = ChatGroq(model_name=g_model, temperature=0.2, api_key=GROQ_API_KEY)
+                    response = llm.invoke(groq_messages)
+                    return response.content
+                except Exception as groq_exc:
+                    groq_errors.append(f"{g_model}: {groq_exc}")
+            return (
+                f"I can’t reach the AI provider right now.\n"
+                f"Gemini error: {exc}\n"
+                f"Groq errors:\n" + "\n".join(groq_errors)
+            )
 
         return (
             f"I can’t reach the AI provider right now. Gemini error: {exc} | No Groq API key found."
