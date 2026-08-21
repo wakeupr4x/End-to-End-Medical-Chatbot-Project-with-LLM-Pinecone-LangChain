@@ -1,4 +1,4 @@
-sentence-transformers==2.2.2
+sentence-transformers>=3.0.0
 langchain
 langchain-community
 langchain-huggingface
