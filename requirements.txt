@@ -10,4 +10,3 @@ gunicorn
 pypdf
 python-dotenv
 pinecone[grpc]
--e .
